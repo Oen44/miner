@@ -15,8 +15,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	viewStyle = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(lipgloss.Color("#681a10"))
 )
 
 const (
@@ -96,6 +101,8 @@ type tile struct {
 }
 
 type world struct {
+	view viewport.Model
+
 	width int
 
 	tiles [][]tile
@@ -115,6 +122,8 @@ type model struct {
 	miner  miner
 	world  world
 	camera camera
+
+	legendView viewport.Model
 }
 
 /*
@@ -301,7 +310,9 @@ func (m *model) renderWorld() string {
 		s.WriteString("\n")
 	}
 
-	return s.String()
+	m.world.view.SetContent(s.String())
+
+	return m.world.view.View()
 }
 
 func newModel() model {
@@ -313,12 +324,14 @@ func newModel() model {
 			targetX: noTargetX,
 		},
 		world: world{
+			view:  viewport.New(0, 0),
 			tiles: make([][]tile, 0),
 		},
 		camera: camera{
 			y: 0,
 		},
-		state: initializing,
+		state:      initializing,
+		legendView: viewport.New(0, 0),
 	}
 
 	return m
@@ -361,6 +374,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.miner.x = m.world.width / 2
 			m.state = ready
 		}
+
+		m.world.view.Height = m.height - 2
+		m.world.view.Width = m.world.width
+		m.legendView.Height = m.height - 2
+		m.legendView.Width = m.width - m.world.view.Width - 4
+
 	}
 	return m, nil
 }
@@ -381,9 +400,11 @@ func (m model) View() string {
 		}())
 	}
 
-	legend := lipgloss.NewStyle().MarginLeft(2).Render(fmt.Sprintf("%s Miner\n%s", tileStyle.Foreground(lipgloss.Color("15")).Render(charMiner), tiles.String()))
+	legend := lipgloss.NewStyle().Render(fmt.Sprintf("%s Miner\n%s", tileStyle.Foreground(lipgloss.Color("15")).Render(charMiner), tiles.String()))
 
-	s := lipgloss.JoinHorizontal(lipgloss.Top, m.renderWorld(), legend)
+	m.legendView.SetContent(legend)
+
+	s := lipgloss.JoinHorizontal(lipgloss.Top, viewStyle.Render(m.renderWorld()), viewStyle.Render(m.legendView.View()))
 
 	return s
 }
