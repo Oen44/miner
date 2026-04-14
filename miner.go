@@ -1,4 +1,13 @@
 /*
+ * ████████▒ ████▒   ████▒ ████████▒     ██████▒   ████████▒
+ * ████████████████▒ ████▒ ██████████▒ ██████████▒ ██████████▒
+ * ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒
+ * ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ██████████▒ ██████████▒
+ * ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ██████████▒ ████████▒
+ * ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒       ████▒ ████▒
+ * ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ██████████▒ ████▒ ████▒
+ * ████▒ ████▒ ████▒ ████▒ ████▒ ████▒   ████████▒ ████▒ ████▒
+ *
  * A tiny TUI toy about a miner digging through an endless ASCII world of tiles
  * Each tile has a type with different mining duration and point value
  * Each tile is represented by a colored character
@@ -10,34 +19,61 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"math/rand"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 var (
-	viewStyle = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(lipgloss.Color("#681a10"))
+	blendWidth  = 69
+	blendHeight = getLogoHeight()
+
+	logoBlend     = lipgloss.Blend2D(blendWidth, blendHeight, 90.0, color.Black, lipgloss.Color("1"))
+	viewStyle     = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(lipgloss.Color("6"))
+	topLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+
+	tileStyle = lipgloss.NewStyle()
+
+	minerColor = lipgloss.Color("1")
+
+	boldLabel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+)
+
+var (
+	cameraFollowOffset = 10 // will be updated based on terminal height on window resize
+
+	tickInterval = 100 * time.Millisecond
+	tickMillis   = int64(tickInterval / time.Millisecond)
+
+	specialTileChance = 50 // %
 )
 
 const (
-	tickInterval      = 100 * time.Millisecond
-	tickMillis        = int64(tickInterval / time.Millisecond)
-	specialTileChance = 50 // %
+	titleLogo = "" +
+		"████████▒ ████▒   ████▒ ████████▒     ██████▒   ████████▒  \n" +
+		"████████████████▒ ████▒ ██████████▒ ██████████▒ ██████████▒\n" +
+		"████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒\n" +
+		"████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ██████████▒ ██████████▒\n" +
+		"████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ██████████▒ ████████▒  \n" +
+		"████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ████▒       ████▒ ████▒\n" +
+		"████▒ ████▒ ████▒ ████▒ ████▒ ████▒ ██████████▒ ████▒ ████▒\n" +
+		"████▒ ████▒ ████▒ ████▒ ████▒ ████▒   ████████▒ ████▒ ████▒\n"
 
-	// Camera
-	cameraFollowOffset = 10
+	intervalStep          = 10 * time.Millisecond
+	specialTileChanceStep = 5
 
 	// Layout
 	uiTopSpacing      = 4
-	defaultWorldWidth = 40
+	defaultWorldWidth = 20
 
 	// Miner
-	noTargetX = -1
+	noTarget = -1
 
 	// Tile render thresholds
 	damageHigh   = 0.75
@@ -45,11 +81,11 @@ const (
 	damageLow    = 0.25
 
 	// Characters
-	charFull  = "█"
-	charHeavy = "▓"
-	charMid   = "▒"
-	charLight = "░"
-	charMiner = "▄"
+	charFull  = "███"
+	charHeavy = "▓▓▓"
+	charMid   = "▒▒▒"
+	charLight = "░░░"
+	charMiner = " ▄ "
 )
 
 const (
@@ -75,14 +111,12 @@ var tileTypes = []struct {
 	mineTime time.Duration
 	weight   int
 }{
-	{"Stone", "240", 1, 200 * time.Millisecond, 0},
-	{"Coal", "232", 6, 500 * time.Millisecond, 60},
-	{"Iron", "130", 14, 1 * time.Second, 35},
-	{"Gold", "220", 30, 2*time.Second + 500*time.Millisecond, 15},
-	{"Diamond", "51", 50, 4 * time.Second, 5},
+	{"Stone", "8", 1, 200 * time.Millisecond, 0},
+	{"Coal", "0", 6, 500 * time.Millisecond, 60},
+	{"Iron", "5", 14, 1 * time.Second, 35},
+	{"Gold", "3", 30, 2*time.Second + 500*time.Millisecond, 15},
+	{"Diamond", "4", 50, 4 * time.Second, 5},
 }
-
-var tileStyle = lipgloss.NewStyle()
 
 type tickMsg time.Time
 
@@ -123,7 +157,8 @@ type model struct {
 	world  world
 	camera camera
 
-	legendView viewport.Model
+	legendView   viewport.Model
+	settingsView viewport.Model
 }
 
 /*
@@ -183,13 +218,13 @@ func (m *miner) digDown(world *world) {
 		m.score += tileTypes[tile.tileType].value
 		tile.mined = true
 		m.y++
-		m.targetX = noTargetX
+		m.targetX = noTarget
 	}
 }
 
 func (m *miner) update(world *world) {
-	if m.targetX == noTargetX {
-		for x, tile := range world.tiles[m.y] {
+	if m.targetX == noTarget && m.y > 0 {
+		for x, tile := range world.tiles[m.y-1] {
 			if tile.tileType > TileStone && !tile.mined {
 				m.targetX = x
 				break
@@ -197,19 +232,13 @@ func (m *miner) update(world *world) {
 		}
 	}
 
-	if m.targetX == noTargetX {
+	if m.targetX == noTarget {
 		m.digDown(world)
 		return
 	}
 
 	if m.y == 0 {
-		if m.x < m.targetX {
-			m.x++
-		} else if m.x > m.targetX {
-			m.x--
-		} else {
-			m.digDown(world)
-		}
+		m.digDown(world)
 	} else {
 		if m.x < m.targetX {
 			var tile = &world.tiles[m.y-1][m.x+1]
@@ -255,8 +284,8 @@ func (t tile) Render() string {
 }
 
 func (m *model) renderWorld() string {
-	left := fmt.Sprintf("Score: %d", m.miner.score)
-	right := fmt.Sprintf("Floor: %d", m.miner.y)
+	left := topLabelStyle.Render(fmt.Sprintf("Score: %d", m.miner.score))
+	right := topLabelStyle.Render(fmt.Sprintf("Floor: %d", m.miner.y))
 
 	var t string
 	elapsed := time.Since(m.started_at)
@@ -268,10 +297,12 @@ func (m *model) renderWorld() string {
 		t = fmt.Sprintf("%02d:%02d:%02d", int(elapsed.Hours()), int(elapsed.Minutes())%60, int(elapsed.Seconds())%60)
 	}
 
-	middle := lipgloss.PlaceHorizontal(m.world.width-lipgloss.Width(left)-lipgloss.Width(right), lipgloss.Center, t)
+	middle := lipgloss.PlaceHorizontal((m.world.width*lipgloss.Width(charFull))-lipgloss.Width(left)-lipgloss.Width(right),
+		lipgloss.Center,
+		topLabelStyle.Render(t))
 
 	top := lipgloss.PlaceHorizontal(
-		m.world.width,
+		m.world.width*lipgloss.Width(charFull),
 		lipgloss.Left,
 		lipgloss.JoinHorizontal(lipgloss.Top, left, middle, right),
 	)
@@ -284,15 +315,15 @@ func (m *model) renderWorld() string {
 		s.WriteString("\n")
 	}
 
-	miner := tileStyle.Foreground(lipgloss.Color("15")).Render(charMiner)
+	miner := tileStyle.Foreground(minerColor).Render(charMiner)
 
 	if m.miner.y == 0 {
-		s.WriteString(strings.Repeat(" ", m.miner.x))
+		s.WriteString(strings.Repeat(" ", m.miner.x*lipgloss.Width(charFull)))
 		s.WriteString(miner)
 	}
 	s.WriteString("\n")
 
-	for y := m.camera.y; y < m.camera.y+m.height-uiTopSpacing-1; y++ {
+	for y := m.camera.y; y < min(len(m.world.tiles), m.camera.y+m.height-uiTopSpacing-1); y++ {
 		for x := 0; x < m.world.width; x++ {
 			if m.miner.y > 0 && m.miner.x == x && m.miner.y-1 == y {
 				s.WriteString(miner)
@@ -304,7 +335,7 @@ func (m *model) renderWorld() string {
 			if !tile.mined {
 				s.WriteString(tileStyle.Foreground(lipgloss.Color(tileTypes[tile.tileType].color)).Render(tile.Render()))
 			} else {
-				s.WriteString(" ")
+				s.WriteString(strings.Repeat(" ", lipgloss.Width(charFull)))
 			}
 		}
 		s.WriteString("\n")
@@ -315,23 +346,100 @@ func (m *model) renderWorld() string {
 	return m.world.view.View()
 }
 
+func (m *model) buildLegend() {
+	var tiles strings.Builder
+
+	for _, t := range tileTypes {
+		fmt.Fprintf(&tiles, "%s %s (%d Point%s)\n", tileStyle.Foreground(lipgloss.Color(t.color)).Render(charFull), t.name, t.value, func() string {
+			if t.value == 1 {
+				return ""
+			}
+			return "s"
+		}())
+	}
+
+	legend := lipgloss.NewStyle().Render(fmt.Sprintf("%s Miner\n%s", tileStyle.Foreground(minerColor).Render(charMiner), tiles.String()))
+
+	m.legendView.SetContent(legend)
+}
+
+func (m *model) buildSettings() {
+	var settings strings.Builder
+
+	settings.WriteString(boldLabel.Italic(true).Render("Settings"))
+	settings.WriteString("\n")
+
+	settings.WriteString(fmt.Sprintf("%s %s\n", boldLabel.Render("Tick Interval"), tickInterval.String()))
+	settings.WriteString(fmt.Sprintf("%s %d%%\n", boldLabel.Render("Special Tile Chance"), specialTileChance))
+
+	// Keybinds
+	settings.WriteString("\n")
+	settings.WriteString(boldLabel.Italic(true).Render("Keybinds"))
+	settings.WriteString("\n")
+	settings.WriteString(fmt.Sprintf("%s Increase Tick Interval\n", boldLabel.Render("Up/K")))
+	settings.WriteString(fmt.Sprintf("%s Decrease Tick Interval\n", boldLabel.Render("Down/J")))
+	settings.WriteString(fmt.Sprintf("%s Increase Special Tile Chance\n", boldLabel.Render("Right/L")))
+	settings.WriteString(fmt.Sprintf("%s Decrease Special Tile Chance\n", boldLabel.Render("Left/H")))
+	settings.WriteString(fmt.Sprintf("%s Quit\n", boldLabel.Render("Q/Ctrl+C")))
+
+	m.settingsView.SetContent(settings.String())
+}
+
+func renderLogo() string {
+	lines := strings.Split(titleLogo, "\n")
+	gradientContent := strings.Builder{}
+
+	for y, line := range lines {
+		if y >= blendHeight {
+			break
+		}
+		x := 0
+		for _, ch := range line {
+			if x >= blendWidth {
+				break
+			}
+			index := y*blendWidth + x
+			if ch != ' ' {
+				gradientContent.WriteString(
+					lipgloss.NewStyle().
+						Foreground(logoBlend[index]).
+						Render(string(ch)),
+				)
+			} else {
+				gradientContent.WriteString(" ")
+			}
+			x++
+		}
+		if y < len(lines)-2 {
+			gradientContent.WriteString("\n")
+		}
+	}
+
+	return gradientContent.String()
+}
+
+func getLogoHeight() int {
+	return strings.Count(titleLogo, "\n")
+}
+
 func newModel() model {
 	m := model{
 		miner: miner{
 			x:       0,
 			y:       0,
 			score:   0,
-			targetX: noTargetX,
+			targetX: noTarget,
 		},
 		world: world{
-			view:  viewport.New(0, 0),
+			view:  viewport.New(),
 			tiles: make([][]tile, 0),
 		},
 		camera: camera{
 			y: 0,
 		},
-		state:      initializing,
-		legendView: viewport.New(0, 0),
+		state:        initializing,
+		legendView:   viewport.New(),
+		settingsView: viewport.New(),
 	}
 
 	return m
@@ -358,9 +466,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tick(tickInterval)
 
-	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC || msg.String() == "q" {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "up", "k":
+			tickInterval += intervalStep
+		case "down", "j":
+			tickInterval = max(intervalStep, tickInterval-intervalStep)
+		case "left", "h":
+			if specialTileChance > 0 {
+				specialTileChance -= specialTileChanceStep
+			}
+		case "right", "l":
+			if specialTileChance < 100 {
+				specialTileChance += specialTileChanceStep
+			}
 		}
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -375,42 +496,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.state = ready
 		}
 
-		m.world.view.Height = m.height - 2
-		m.world.view.Width = m.world.width
-		m.legendView.Height = m.height - 2
-		m.legendView.Width = m.width - m.world.view.Width - 4
+		m.world.view.SetHeight(m.height - 2 - getLogoHeight())
+		m.world.view.SetWidth(m.world.width * lipgloss.Width(charFull))
+		m.legendView.SetHeight(1 + len(tileTypes))
+		m.legendView.SetWidth(m.width - m.world.view.Width() - 4)
+		m.settingsView.SetHeight(m.height - m.legendView.Height() - 4 - getLogoHeight())
+		m.settingsView.SetWidth(m.legendView.Width())
 
+		cameraFollowOffset = max(uiTopSpacing, m.world.view.Height()/2) - 2
 	}
 	return m, nil
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
+	var v tea.View
+	v.AltScreen = true
 	if m.state == initializing {
-		return "Initializing..."
+		v.SetContent(renderLogo())
+	} else {
+		m.buildLegend()
+		m.buildSettings()
+
+		s := lipgloss.JoinVertical(lipgloss.Top,
+			lipgloss.PlaceHorizontal(m.width, lipgloss.Center, renderLogo()),
+			lipgloss.JoinHorizontal(lipgloss.Top,
+				viewStyle.Render(m.renderWorld()),
+				lipgloss.JoinVertical(lipgloss.Top,
+					viewStyle.Render(m.legendView.View()),
+					viewStyle.Render(m.settingsView.View()),
+				),
+			))
+
+		v.SetContent(s)
 	}
-
-	var tiles strings.Builder
-
-	for _, t := range tileTypes {
-		fmt.Fprintf(&tiles, "%s %s (%d Point%s)\n", tileStyle.Foreground(lipgloss.Color(t.color)).Render(charFull), t.name, t.value, func() string {
-			if t.value == 1 {
-				return ""
-			}
-			return "s"
-		}())
-	}
-
-	legend := lipgloss.NewStyle().Render(fmt.Sprintf("%s Miner\n%s", tileStyle.Foreground(lipgloss.Color("15")).Render(charMiner), tiles.String()))
-
-	m.legendView.SetContent(legend)
-
-	s := lipgloss.JoinHorizontal(lipgloss.Top, viewStyle.Render(m.renderWorld()), viewStyle.Render(m.legendView.View()))
-
-	return s
+	return v
 }
 
 func main() {
-	p := tea.NewProgram(newModel(), tea.WithAltScreen())
+	p := tea.NewProgram(newModel())
 	if _, err := p.Run(); err != nil {
 		os.Exit(1)
 	}
