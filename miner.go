@@ -28,6 +28,17 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/spf13/cobra"
+)
+
+// Settings
+var (
+	showLogo          = true
+	showLegend        = true
+	showSettings      = true
+	worldWidth        = 20
+	tickInterval      = 100 * time.Millisecond
+	specialTileChance = 50 // %
 )
 
 var (
@@ -48,10 +59,7 @@ var (
 var (
 	cameraFollowOffset = 10 // will be updated based on terminal height on window resize
 
-	tickInterval = 100 * time.Millisecond
-	tickMillis   = int64(tickInterval / time.Millisecond)
-
-	specialTileChance = 50 // %
+	tickMillis = int64(tickInterval / time.Millisecond)
 )
 
 const (
@@ -69,8 +77,7 @@ const (
 	specialTileChanceStep = 5
 
 	// Layout
-	uiTopSpacing      = 4
-	defaultWorldWidth = 20
+	uiTopSpacing = 4
 
 	// Miner
 	noTarget = -1
@@ -386,6 +393,10 @@ func (m *model) buildSettings() {
 }
 
 func renderLogo() string {
+	if !showLogo {
+		return ""
+	}
+
 	lines := strings.Split(titleLogo, "\n")
 	gradientContent := strings.Builder{}
 
@@ -419,6 +430,10 @@ func renderLogo() string {
 }
 
 func getLogoHeight() int {
+	if !showLogo {
+		return 0
+	}
+
 	return strings.Count(titleLogo, "\n")
 }
 
@@ -488,7 +503,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		if m.state == initializing {
 			m.started_at = time.Now()
-			m.world.width = min(defaultWorldWidth, m.width)
+			m.world.width = min(worldWidth, m.width)
 			for i := 0; i < m.height; i++ {
 				m.world.generateRow()
 			}
@@ -517,24 +532,101 @@ func (m model) View() tea.View {
 		m.buildLegend()
 		m.buildSettings()
 
-		s := lipgloss.JoinVertical(lipgloss.Top,
-			lipgloss.PlaceHorizontal(m.width, lipgloss.Center, renderLogo()),
-			lipgloss.JoinHorizontal(lipgloss.Top,
-				viewStyle.Render(m.renderWorld()),
-				lipgloss.JoinVertical(lipgloss.Top,
-					viewStyle.Render(m.legendView.View()),
-					viewStyle.Render(m.settingsView.View()),
-				),
-			))
+		var logo, legend, settings string
+		if showLogo {
+			logo = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, renderLogo())
+		}
+		if showLegend {
+			legend = viewStyle.Render(m.legendView.View())
+		}
+		if showSettings {
+			settings = viewStyle.Render(m.settingsView.View())
+		}
 
-		v.SetContent(s)
+		world := viewStyle.Render(m.renderWorld())
+
+		rightParts := []string{}
+		if showLegend {
+			rightParts = append(rightParts, legend)
+		}
+		if showSettings {
+			rightParts = append(rightParts, settings)
+		}
+		var rightCol string
+		if len(rightParts) > 0 {
+			rightCol = lipgloss.JoinVertical(lipgloss.Top, rightParts...)
+		}
+
+		cols := []string{world}
+		if rightCol != "" {
+			cols = append(cols, rightCol)
+		}
+
+		mainContent := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+
+		content := []string{}
+		if logo != "" {
+			content = append(content, logo)
+		}
+		content = append(content, mainContent)
+
+		v.SetContent(lipgloss.JoinVertical(lipgloss.Top, content...))
 	}
 	return v
 }
 
-func main() {
+var (
+	show []string
+	hide []string
+)
+
+func run(cmd *cobra.Command, args []string) {
+	if len(show) > 0 {
+		showLogo = false
+		showLegend = false
+		showSettings = false
+	}
+
+	for _, elem := range show {
+		switch strings.TrimSpace(strings.ToLower(elem)) {
+		case "logo":
+			showLogo = true
+		case "legend":
+			showLegend = true
+		case "settings":
+			showSettings = true
+		}
+	}
+
+	for _, elem := range hide {
+		switch strings.TrimSpace(strings.ToLower(elem)) {
+		case "logo":
+			showLogo = false
+		case "legend":
+			showLegend = false
+		case "settings":
+			showSettings = false
+		}
+	}
+
 	p := tea.NewProgram(newModel())
 	if _, err := p.Run(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func main() {
+	cmd := &cobra.Command{
+		Use: "miner",
+		Run: run,
+	}
+
+	cmd.Flags().StringSliceVar(&show, "show", []string{}, "Comma separated list of UI elements to show (logo, legend, settings)")
+	cmd.Flags().StringSliceVar(&hide, "hide", []string{}, "Comma separated list of UI elements to hide (logo, legend, settings)")
+	cmd.Flags().IntVar(&worldWidth, "width", worldWidth, "Width of the world (number of tiles in a row)")
+	cmd.Flags().DurationVar(&tickInterval, "interval", tickInterval, "Tick interval (e.g. 100ms, 1s)")
+	cmd.Flags().IntVar(&specialTileChance, "chance", specialTileChance, "Chance for a row to contain a special tile (0-100)")
+
+	cmd.Execute()
+
 }
